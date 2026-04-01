@@ -34,18 +34,18 @@ flowchart TD
   D --> E[SpaceX API v5]
   B --> F[Deterministic Guards]
   F --> G[Freshness/Future Checks]
-  G --> L[External Cross-Check Tools (non-agent)]
+  G --> L[External Cross-Check Tools]
   L --> M[Launch Library 2]
   L --> O[RocketLaunch.Live]
   L --> H[Consent Prompt for SpaceX Website Confirmation]
   H --> I{User says yes?}
-  I -->|Yes| J[SpaceX Website Lookup\n(timeout + error handling)]
+  I -->|Yes| J[SpaceX Website Lookup<br/>timeout + error handling]
   I -->|No| K[Keep non-SpaceX verified answer]
   B --> P[Final Answer Evaluator Agent]
   P --> Q[Quality Gate + Confidence Score]
   P --> T[QA Evaluator Agent Review JSON]
   Q --> R[Friendly User Answer]
-  R --> U[Engagement Follow-Up Agent\n(offer + yes executes action)]
+  R --> U[Engagement Follow-Up Agent<br/>offer + yes executes action]
   Q --> S[Think-Act-Observe Trace + Determinations]
 ```
 
