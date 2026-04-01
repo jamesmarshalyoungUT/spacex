@@ -1,255 +1,174 @@
-# SpaceX Agentic Hiring Test Solution
+# SpaceX Agentic AI Platform
 
-This project implements a conversational AI agent for SpaceX questions using live SpaceX API data.
+A production-style conversational AI system that answers SpaceX questions using live data, tool-grounded reasoning, and transparent decision traces.
 
-It is built to demonstrate **agentic behavior** required by the challenge:
-- Conversational memory across turns
-- Tool-based factual grounding
-- Multi-step reasoning with multiple tool calls
-- Clarifying questions for ambiguous input
-- Error handling and graceful fallback
-- Visible Think-Act-Observe trace (not a single input-output line)
-- Deterministic freshness/future validation guards for stale launch data
-- Fuzzy typo-tolerant intent matching for key launch keywords (e.g., "lauch" -> "launch")
-- Explicit user-consent gate before SpaceX website lookup
-- Timeout-safe and exception-safe website fallback handling
-- Engagement follow-up agent that offers one actionable next step; saying yes executes it
+This project combines an orchestrated multi-agent workflow with deterministic guardrails to deliver reliable, explainable answers across CLI, API, and Streamlit interfaces.
+
+## What This Solution Delivers
+
+- Agentic conversation with memory across turns
+- Multi-step tool orchestration with visible Think-Act-Observe traces
+- SpaceX domain grounding via SpaceX API v5
+- Fallback verification pipeline for stale or missing launch data
+- Consent-first website confirmation flow before SpaceX website lookup
+- Timeout-safe and exception-safe external lookup handling
+- Query-type-aware validation behavior (latest/next, year-based, mission-specific)
+- Fuzzy typo-tolerant launch intent matching (for example, "lauch" -> "launch")
+- Final-answer quality gate with confidence scoring
+- Engagement follow-up agent that can execute the next suggested action on user approval
 
 ## Stack
 
 - Python
 - LangChain ReAct agent
-- SpaceX v5 API (`https://api.spacexdata.com/v5`)
+- SpaceX API v5 (`https://api.spacexdata.com/v5`)
+- FastAPI (optional API surface)
+- Streamlit (interactive app)
 - CLI chat interface
-- Optional FastAPI web endpoint
-- Streamlit demo app
 
-## Architecture Diagram
+## Architecture
 
 ```mermaid
 flowchart TD
-  A[User CLI / Streamlit / API] --> B[SpaceX Session Orchestrator Agent]
-  B --> C[Primary Reasoning Agent]
-  C --> D[SpaceX Tools]
+  A[User: CLI / Streamlit / API] --> B[Session Orchestrator]
+  B --> C[Reasoning Agent]
+  C --> D[SpaceX Tooling Layer]
   D --> E[SpaceX API v5]
-  B --> F[Deterministic Guards]
-  F --> G[Freshness/Future Checks]
-  G --> L[External Cross-Check Tools]
-  L --> M[Launch Library 2]
-  L --> O[RocketLaunch.Live]
-  L --> H[Consent Prompt for SpaceX Website Confirmation]
-  H --> I{User says yes?}
-  I -->|Yes| J[SpaceX Website Lookup<br/>timeout + error handling]
-  I -->|No| K[Keep non-SpaceX verified answer]
-  B --> P[Final Answer Evaluator Agent]
-  P --> Q[Quality Gate + Confidence Score]
-  P --> T[QA Evaluator Agent Review JSON]
-  Q --> R[Friendly User Answer]
-  R --> U[Engagement Follow-Up Agent<br/>offer + yes executes action]
-  Q --> S[Think-Act-Observe Trace + Determinations]
+
+  B --> F[Deterministic Guardrails]
+  F --> G[Freshness + Future Validation]
+  G --> H[External Cross-Checks]
+  H --> I[Launch Library 2]
+  H --> J[RocketLaunch.Live]
+
+  G --> K[Consent Gate]
+  K --> L{User approved website lookup?}
+  L -->|Yes| M[SpaceX Website Lookup\n(timeout + error safe)]
+  L -->|No| N[Return verified non-website answer]
+
+  B --> O[Final Answer Evaluator]
+  O --> P[Quality Gate + Confidence]
+  P --> Q[User-Facing Answer]
+
+  Q --> R[Engagement Follow-Up Agent]
+  R --> S[Offer next action\n"Yes" executes suggested query]
 ```
 
-## Guard Behavior (Consent Before Website Search)
+## Guardrail and Consent Behavior
 
-The agent validates different query types and explains primary source limitations before offering fallback options.
+The platform does not silently scrape the SpaceX website. It explains source limitations first, then asks for explicit user approval where website confirmation is supported.
 
-### Validation Guards for Different Query Types
+### Latest/Next launch questions
 
-**Latest/Next Launch Queries:**
-- When historical data is stale (>180 days old), agent checks external sources (Launch Library 2, RocketLaunch.Live).
-- If a newer source is found, user confirms before website lookup.
-- If no external source helps, user consents to SpaceX website search.
+- Uses SpaceX API as primary source.
+- If data appears stale (older than 180 days), cross-checks Launch Library 2 and RocketLaunch.Live.
+- If needed, requests user consent before website confirmation lookup.
 
-**Year-Based Queries** (e.g., "What launches happened in 2024?"):
-- Agent queries primary source for launches in the requested year.
-- If no results found, explains primary source limitation and asks for website confirmation.
-- Website confirmation is not available for year queries; suggests trying latest/next search instead.
+### Year-based launch questions
 
-**Mission-Specific Queries** (e.g., "Which rocket was used for the Starlink 9-1 mission?"):
-- Agent attempts to find mission details in primary source.
-- If no data found (answer is only a confirmation prompt), explains primary source limitation and asks for website confirmation.
-- Website confirmation is not available for mission queries; suggests trying latest/next search instead.
+- Queries the primary source for launches in the requested year.
+- If unavailable, explains source limitation.
+- Suggests alternative query paths because website confirmation is not enabled for this query class.
 
-### Consent Prompt Pattern
+### Mission-specific questions
 
-When stale or unavailable primary data is detected, the agent does not automatically scrub the SpaceX website.
+- Attempts mission lookup from primary source and internal tools.
+- If unresolved, explains source limitation and offers alternatives.
+- Website confirmation is not enabled for this query class.
 
-It explains the issue first, then asks the user:
+## QA Evaluator and Follow-Up Agent
 
-"I was not able to find [this information/launches for this year] in the primary source. I could look to see if it is available on the SpaceX website. Would you like me to search there?"
+Two post-answer agents are intentionally separated:
 
-Behavior:
-- If user says yes (for latest/next queries): agent performs website lookup.
-- If user says yes (for year/mission queries): agent returns message that these aren't available via website lookup; suggests alternatives.
-- If user says no: agent skips website lookup and keeps the already verified non-SpaceX source answer (if available).
-- If response is unclear: agent asks for a clear yes/no.
-- If website lookup times out or errors: agent returns a safe fallback message and does not crash.
+1. QA Evaluator Agent
+- Checks intent match, grounding, and answer quality.
+- Produces structured review metadata and confidence.
+- Acts as a trust and reliability layer.
 
-Current lookup order for stale latest/next launch cases:
-1. SpaceX API v5 (primary)
-2. Launch Library 2 and RocketLaunch.Live (secondary cross-check)
-3. SpaceX website confirmation only after explicit user consent
+2. Engagement Follow-Up Agent
+- Offers one relevant next action after each completed response.
+- If user replies yes, automatically executes the suggested next query.
+- Handles user experience continuity without mixing with safety decisions.
 
-## QA Evaluator and Engagement Follow-Up Agent
+## Project Structure
 
-This system intentionally uses two different post-answer agents because they serve different goals.
+- `src/spacex_client.py`: SpaceX API wrapper and HTTP handling
+- `src/tools.py`: domain tools for launches, rockets, launchpads, and filtering
+- `src/agent.py`: ReAct agent setup, orchestration logic, and memory integration
+- `src/chat_cli.py`: terminal chat experience with trace output
+- `src/api_server.py`: FastAPI app with session-aware chat endpoint
+- `src/streamlit_app.py`: Streamlit chat UI with per-turn trace rendering
+- `src/demo_script.py`: scripted end-to-end demo conversations
+- `src/submission_proof.py`: requirement and validation proof output utility
+- `src/validation_runner.py`: formal validation runner
+- `src/static/index.html`: lightweight trace timeline viewer
 
-### 1) QA Evaluator Agent (Accuracy + Trust)
+## Quick Start
 
-Purpose:
-- Validate that the final answer matches user intent.
-- Validate that the answer is grounded in observed tool outputs.
-- Return a structured verdict with confidence and issues.
-
-What it produces:
-- `qa_review` JSON (intent match, grounded-in-trace check, pass/fail verdict, confidence, issues, recommended action)
-- `quality_gate` metadata (status + confidence score) shown in CLI/Streamlit/API
-
-Why it exists:
-- Keeps answers reliable and auditable.
-- Makes evaluation explicit for reviewers.
-- Prevents silent hallucinations by forcing trace-grounded checks.
-
-### 2) Engagement Follow-Up Agent (Conversation Continuation)
-
-Purpose:
-- Offer one optional, actionable next step after every completed answer.
-- Encourage continued interaction; if the user says yes, the agent actually executes the suggested action.
-- Runs on all completed turns, including decline ("no") responses from the website consent gate.
-
-What it produces:
-- `offer_text`: short description of what the agent will look up (e.g., "I can find details about the rocket used in this mission")
-- `suggested_query`: the natural-language question executed when user says yes
-- A prompt appended to user-facing output: `"If you're interested, I can <offer_text>. Would you like me to do that?"`
-- Session state `_pending_engagement_action` stores the suggested query; a yes/no response on the next turn either executes it or dismisses it
-
-Why it exists:
-- Improves user retention and session depth.
-- Keeps prompts domain-relevant (SpaceX context), not generic filler.
-- Separates engagement behavior from factual validation logic.
-
-### Why these are separate agents
-
-- QA Evaluator is a safety/quality function.
-- Engagement Follow-Up is a UX/conversation function.
-- Keeping them separate avoids mixing trust decisions with engagement goals.
-- This separation also makes traces easier to audit.
-
-### Example Trace Snippet
-
-```text
-Step 3 (P-Q) Action: final_answer_evaluator_agent
-Step 3 (P-Q) Observation: {"verdict":"pass","confidence":"high",...}
-Step 3 (P-Q) Determination: final_answer_quality_gate => pass
-
-Step 4 (A-B) Action: engagement_followup_agent
-Step 4 (A-B) Observation: {"include_followup":true,"offer_text":"I can find details about the Falcon 9 rocket","suggested_query":"What rocket type is used for the next SpaceX launch?"}
-Step 4 (A-B) Determination: engagement_followup => pass
-```
-
-## Project Files
-
-- `src/spacex_client.py`: robust SpaceX API wrapper
-- `src/tools.py`: agent tools (launch/rocket/launchpad search, year queries, etc.)
-- `src/agent.py`: ReAct prompt + executor + memory
-- `src/chat_cli.py`: terminal chatbot with reasoning trace output
-- `src/api_server.py`: optional HTTP interface with per-session memory
-- `src/demo_script.py`: runs exact sample questions automatically with traces
-- `src/static/index.html`: lightweight web page to visualize Action/Observation timeline
-- `src/streamlit_app.py`: Streamlit chat app with per-turn trace visualization
-
-## Setup
-
-1. Install dependencies:
+1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Configure environment:
+2. Configure environment
 
 ```bash
 copy .env.example .env
 ```
 
-Then edit `.env` and set `GEMINI_API_KEY`.
+3. Set your key in `.env`
 
-## Run CLI (recommended for demo)
+```env
+GEMINI_API_KEY=your_key_here
+```
+
+## Run Interfaces
+
+### CLI
 
 ```bash
 python -m src.chat_cli
 ```
 
-Sample prompts:
+Example prompts:
+
 - `When was the last SpaceX launch?`
 - `What's the next SpaceX launch and where is it happening?`
 - `How many launches did SpaceX complete in 2024?`
 - `Which rocket was used for the Starlink 9-1 mission?`
-- `Show me all successful Falcon 9 launches.`
-- `Tell me about the most recent launch from Vandenberg.`
 
-The CLI prints:
-- Final answer
-- Detailed Think-Act-Observe tool trace per turn
-
-## Run Auto Demo Script
-
-```bash
-python -m src.demo_script
-```
-
-This runs the exact sample prompts from the hiring prompt and prints:
-- Question
-- Final answer
-- Step-by-step Action and Observation trace
-
-## Run Submission Proof Log (One Command)
-
-```bash
-python -m src.submission_proof
-```
-
-This prints a requirement-by-requirement proof log and embeds the formal validation report.
-
-## Run API Server (optional)
+### API (FastAPI)
 
 ```bash
 uvicorn src.api_server:app --reload
 ```
 
-Then open:
+Open:
+
 - `http://127.0.0.1:8000/`
 
 Endpoints:
+
 - `GET /health`
 - `POST /chat`
 
-Example request body:
+Example request:
 
 ```json
 {
-  "session_id": "candidate-demo-1",
+  "session_id": "demo-session-1",
   "message": "What was the outcome of the first Falcon Heavy launch?"
 }
 ```
 
-Response includes `answer` and a `trace` array containing tool calls and observations.
-
-## Run Streamlit App
+### Streamlit
 
 ```bash
 streamlit run src/streamlit_app.py
 ```
 
-### Streamlit Secrets (Recommended)
-
-For local Streamlit development:
-
-1. Create `.streamlit/secrets.toml` from `.streamlit/secrets.toml.example`.
-2. Add your real keys in `.streamlit/secrets.toml`.
-3. Keep `.streamlit/secrets.toml` out of git (already ignored in `.gitignore`).
-
-Example:
+For local secrets, create `.streamlit/secrets.toml` and set:
 
 ```toml
 GEMINI_API_KEY = "your_gemini_api_key_here"
@@ -257,68 +176,33 @@ GEMINI_MODEL = "gemini-2.0-flash"
 SPACEX_API_BASE_URL = "https://api.spacexdata.com/v5"
 ```
 
-For Streamlit Community Cloud:
+## Validation and Operational Confidence
 
-1. Open your app settings.
-2. Go to `Secrets`.
-3. Paste the same TOML content and save.
-
-The app reads secrets with `st.secrets` and uses them at runtime.
-
-The Streamlit app provides:
-- conversational chat
-- session reset button
-- Sample question picker
-- Action/Observation trace visualization per turn
-
-## Validation
-
-Run formal validation checks:
+Run validation checks:
 
 ```bash
 python -m src.validation_runner
 ```
 
-See full validation notes in `VALIDATION.md`.
+Reference validation notes in `VALIDATION.md`.
 
-## Requirement Coverage
+## Observability and Reliability
 
-1. Conversational Agent:
-- CLI, Streamlit, and API chat interfaces
-- session memory maintained across turns
+- Answers are grounded in tool outputs, not free-form generation alone.
+- Intermediate reasoning actions are traceable per turn.
+- Tooling is intentionally granular so the agent can compose robust multi-step plans.
+- Fallback behavior is consent-gated, timeout-safe, and failure-tolerant.
 
-2. Domain: SpaceX:
-- live data answers across launch, rocket, launchpad, and location queries
+## Demo Utilities
 
-3. Tool Design:
-- dedicated tools for API calls, parsing, filtering, and fallback handling
+Run scripted conversation demo:
 
-4. LLM Integration:
-- intent interpretation + tool orchestration + grounded answer synthesis
+```bash
+python -m src.demo_script
+```
 
-5. Agentic Behavior:
-- multi-tool reasoning loops
-- deterministic freshness/future guards for stale latest/next launch data
-- year-based and mission-specific query validation with primary source explanations
-- clarifying questions for ambiguous launch input
-- explicit consent prompt before website lookup when primary data is unavailable
-- timeout-safe and exception-safe website lookup execution
-- final-answer evaluator agent with quality gate
+Run proof/report utility:
 
-6. Validation:
-- repeatable validation runner and report (`src/validation_runner.py`, `VALIDATION.md`)
-
-## Beyond The Ask
-
-- Quality Gate metadata with confidence score (0-100)
-- Friendly customer-facing answers separated from technical trace
-- Friendly date formatting in user answers and trace hints
-- External cross-source verification to mitigate stale primary API data
-- SpaceX website direct fallback source integrated in addition to Launch Library 2 and RocketLaunch.Live
-- Consent-first fallback policy to avoid unexpected web scraping behavior
-
-## Notes
-
-- Answers are grounded in real tool outputs from SpaceX API.
-- Agent behavior is observable via verbose traces and returned intermediate steps.
-- The design intentionally keeps tools granular so the agent can chain them autonomously.
+```bash
+python -m src.submission_proof
+```
