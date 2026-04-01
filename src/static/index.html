@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SpaceX Agentic Trace Demo</title>
+    <style>
+      :root {
+        --bg: #f2efe7;
+        --panel: #fff9ec;
+        --text: #1d2b3a;
+        --muted: #5d6975;
+        --accent: #e06c00;
+        --accent-soft: #ffd8b0;
+        --line: #dfd3be;
+        --ok: #0f7b6c;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+        color: var(--text);
+        background: radial-gradient(circle at 20% 20%, #fff7df, transparent 40%),
+          radial-gradient(circle at 80% 15%, #ffe6c7, transparent 35%),
+          linear-gradient(160deg, #f2efe7 0%, #efe7d9 100%);
+        min-height: 100vh;
+      }
+
+      .wrap {
+        width: min(1000px, 92vw);
+        margin: 28px auto;
+      }
+
+      .hero {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 18px;
+        padding: 20px;
+        box-shadow: 0 14px 35px rgba(45, 30, 11, 0.1);
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 1.7rem;
+        letter-spacing: 0.2px;
+      }
+
+      .sub {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr;
+        gap: 18px;
+        margin-top: 18px;
+      }
+
+      .card {
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 16px;
+        padding: 16px;
+      }
+
+      label {
+        display: block;
+        font-size: 0.9rem;
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+
+      input,
+      textarea,
+      button,
+      select {
+        width: 100%;
+        font: inherit;
+      }
+
+      input,
+      textarea,
+      select {
+        border: 1px solid #c8bda7;
+        border-radius: 10px;
+        padding: 10px;
+        background: #fffcf3;
+        color: var(--text);
+      }
+
+      textarea {
+        min-height: 100px;
+        resize: vertical;
+      }
+
+      button {
+        margin-top: 10px;
+        border: none;
+        background: var(--accent);
+        color: #fff;
+        padding: 11px 14px;
+        border-radius: 10px;
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: wait;
+      }
+
+      .answer {
+        margin-top: 14px;
+        border-left: 4px solid var(--ok);
+        padding: 10px 12px;
+        background: #f6fff8;
+        border-radius: 6px;
+        white-space: pre-wrap;
+      }
+
+      .trace {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 70vh;
+        overflow: auto;
+      }
+
+      .step {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        background: #fffdf6;
+        opacity: 0;
+        transform: translateY(6px);
+        animation: reveal 280ms ease forwards;
+      }
+
+      .tag {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 20px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+
+      .tag-action {
+        background: var(--accent-soft);
+        color: #803700;
+      }
+
+      .tag-observation {
+        background: #d9f8e8;
+        color: #0b5b4f;
+      }
+
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font-size: 0.86rem;
+      }
+
+      @keyframes reveal {
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 860px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <section class="hero">
+        <h1>SpaceX Agentic Flow Demo</h1>
+        <p class="sub">Ask a question, then inspect Thought/Action/Observation steps from tool calls.</p>
+      </section>
+
+      <div class="grid">
+        <section class="card">
+          <label for="sessionId">Session ID</label>
+          <input id="sessionId" value="demo-session" />
+
+          <label for="sampleQuestion" style="margin-top: 10px">Sample Questions</label>
+          <select id="sampleQuestion">
+            <option value="">Select a sample question</option>
+            <option>When was the last SpaceX launch?</option>
+            <option>What's the next SpaceX launch and where is it happening?</option>
+            <option>How many launches did SpaceX complete in 2024?</option>
+            <option>Which rocket was used for the Starlink 9-1 mission?</option>
+            <option>Show me all successful Falcon 9 launches.</option>
+            <option>What was the outcome of the first Falcon Heavy launch?</option>
+            <option>Tell me about the most recent launch from Vandenberg.</option>
+          </select>
+
+          <label for="message" style="margin-top: 10px">Question</label>
+          <textarea id="message" placeholder="Ask anything about SpaceX..."></textarea>
+
+          <button id="runBtn">Run Agent</button>
+
+          <div id="answer" class="answer" hidden></div>
+        </section>
+
+        <section class="card">
+          <h3 style="margin-top: 0">Trace Timeline</h3>
+          <div id="trace" class="trace"></div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const runBtn = document.getElementById("runBtn");
+      const sessionInput = document.getElementById("sessionId");
+      const messageInput = document.getElementById("message");
+      const sampleSelect = document.getElementById("sampleQuestion");
+      const answerBox = document.getElementById("answer");
+      const traceBox = document.getElementById("trace");
+
+      sampleSelect.addEventListener("change", () => {
+        if (sampleSelect.value) {
+          messageInput.value = sampleSelect.value;
+        }
+      });
+
+      function renderTrace(trace) {
+        traceBox.innerHTML = "";
+        if (!trace || trace.length === 0) {
+          traceBox.innerHTML = "<div class='step'><span class='tag tag-observation'>Info</span><pre>No tool steps returned.</pre></div>";
+          return;
+        }
+
+        trace.forEach((item, idx) => {
+          const div = document.createElement("div");
+          div.className = "step";
+          div.style.animationDelay = `${idx * 60}ms`;
+
+          if (item.type === "action") {
+            div.innerHTML = `<span class='tag tag-action'>Action</span><pre>Tool: ${item.tool}\nInput: ${JSON.stringify(item.tool_input, null, 2)}</pre>`;
+          } else {
+            div.innerHTML = `<span class='tag tag-observation'>Observation</span><pre>Tool: ${item.tool}\n${item.observation}</pre>`;
+          }
+          traceBox.appendChild(div);
+        });
+      }
+
+      runBtn.addEventListener("click", async () => {
+        const session_id = sessionInput.value.trim();
+        const message = messageInput.value.trim();
+
+        if (!session_id || !message) {
+          alert("Please provide session id and a question.");
+          return;
+        }
+
+        runBtn.disabled = true;
+        runBtn.textContent = "Running...";
+        answerBox.hidden = true;
+        traceBox.innerHTML = "<div class='step'><span class='tag tag-observation'>Running</span><pre>Calling agent...</pre></div>";
+
+        try {
+          const response = await fetch("/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id, message }),
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(`HTTP ${response.status}: ${text}`);
+          }
+
+          const data = await response.json();
+          answerBox.hidden = false;
+          answerBox.textContent = data.answer || "(No answer)";
+          renderTrace(data.trace || []);
+        } catch (err) {
+          answerBox.hidden = false;
+          answerBox.textContent = `Error: ${err.message}`;
+          traceBox.innerHTML = "";
+        } finally {
+          runBtn.disabled = false;
+          runBtn.textContent = "Run Agent";
+        }
+      });
+    </script>
+  </body>
+</html>
