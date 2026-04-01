@@ -43,7 +43,7 @@ flowchart TD
 
   G --> K[Consent Gate]
   K --> L{User approved website lookup?}
-  L -->|Yes| M[SpaceX Website Lookup\n(timeout + error safe)]
+  L -->|Yes| M[SpaceX Website Lookup<br/>timeout + error safe]
   L -->|No| N[Return verified non-website answer]
 
   B --> O[Final Answer Evaluator]
@@ -51,7 +51,7 @@ flowchart TD
   P --> Q[User-Facing Answer]
 
   Q --> R[Engagement Follow-Up Agent]
-  R --> S[Offer next action\n"Yes" executes suggested query]
+  R --> S[Offer next action<br/>Yes executes suggested query]
 ```
 
 ## Guardrail and Consent Behavior
