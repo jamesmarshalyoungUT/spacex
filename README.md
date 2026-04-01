@@ -46,8 +46,10 @@ flowchart TD
   L -->|Yes| M[SpaceX Website Lookup<br/>timeout + error safe]
   L -->|No| N[Return verified non-website answer]
 
-  B --> O[Final Answer Evaluator]
-  O --> P[Quality Gate + Confidence]
+  B --> O[Final Answer Evaluator Agent]
+  O --> T[QA Evaluator Agent]
+  T --> P[Quality Gate + Confidence]
+  T --> V[QA Evaluator Agent Review JSON]
   P --> Q[User-Facing Answer]
 
   Q --> R[Engagement Follow-Up Agent]
