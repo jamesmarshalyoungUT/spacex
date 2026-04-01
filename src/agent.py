@@ -702,11 +702,11 @@ class SpaceXAgentSession:
             _add_determination(
                 trace,
                 check="website_lookup_consent",
-                verdict="pending",
-                rationale="User response was unclear; consent confirmation requested again.",
+                verdict="declined",
+                rationale="User response was unclear; treating as a new question and clearing pending state.",
             )
-            answer = "Please reply yes or no. Would you like me to search the SpaceX website for this?"
-            return self._finalize_confirmation_turn(user_input=user_input, answer=answer, trace=trace)
+            self._pending_website_lookup = None
+            return self.ask(user_input)
 
         _add_determination(
             trace,
