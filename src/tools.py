@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.tools import tool
+import requests
 
 from .spacex_client import SpaceXClient
 
@@ -29,6 +30,151 @@ def _launch_summary(launch: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _latest_spacex_launch_from_ll2() -> dict[str, Any]:
+    base_url = "https://ll.thespacedevs.com/2.2.0"
+    candidate_paths = [
+        "/launch/?limit=1&ordering=-net&lsp__name=SpaceX",
+        "/launch/?limit=5&ordering=-net&search=SpaceX",
+        "/launch/previous/?limit=30",
+        "/launch/?limit=30&ordering=-net",
+    ]
+
+    last_error: str | None = None
+    now_utc = datetime.now(timezone.utc)
+
+    for path in candidate_paths:
+        try:
+            response = requests.get(f"{base_url}{path}", timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                results = payload.get("results", [])
+            elif isinstance(payload, dict):
+                results = [payload]
+            else:
+                results = []
+
+            if not results:
+                continue
+
+            selected: dict[str, Any] | None = None
+            for item in results:
+                provider = (item.get("launch_service_provider") or {}).get("name", "")
+                net = item.get("net")
+                launch_time: datetime | None = None
+                if isinstance(net, str):
+                    try:
+                        launch_time = datetime.fromisoformat(net.replace("Z", "+00:00"))
+                    except ValueError:
+                        launch_time = None
+
+                if (
+                    isinstance(provider, str)
+                    and "spacex" in provider.lower()
+                    and launch_time is not None
+                    and launch_time <= now_utc
+                ):
+                    selected = item
+                    break
+            if not selected:
+                continue
+            if selected is None:
+                continue
+            selected_item: dict[str, Any] = selected
+
+            return {
+                "source": "launch_library_2",
+                "id": selected_item.get("id"),
+                "name": selected_item.get("name"),
+                "date_utc": selected_item.get("net"),
+                "status": (selected_item.get("status") or {}).get("name"),
+                "provider": (selected_item.get("launch_service_provider") or {}).get("name"),
+                "pad": (selected_item.get("pad") or {}).get("name"),
+                "location": ((selected_item.get("pad") or {}).get("location") or {}).get("name"),
+                "url": selected_item.get("url"),
+            }
+        except requests.RequestException as exc:
+            last_error = str(exc)
+
+    return {
+        "source": "launch_library_2",
+        "error": "Unable to fetch a recent SpaceX launch from Launch Library 2",
+        "details": last_error,
+    }
+
+
+def _next_spacex_launch_from_ll2() -> dict[str, Any]:
+    base_url = "https://ll.thespacedevs.com/2.2.0"
+    candidate_paths = [
+        "/launch/upcoming/?limit=30",
+        "/launch/?limit=30&ordering=net",
+        "/launch/?limit=30&search=SpaceX&ordering=net",
+    ]
+
+    now_utc = datetime.now(timezone.utc)
+    last_error: str | None = None
+
+    for path in candidate_paths:
+        try:
+            response = requests.get(f"{base_url}{path}", timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+
+            if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                results = payload.get("results", [])
+            elif isinstance(payload, dict):
+                results = [payload]
+            else:
+                results = []
+
+            if not results:
+                continue
+
+            selected: dict[str, Any] | None = None
+            for item in results:
+                provider = (item.get("launch_service_provider") or {}).get("name", "")
+                net = item.get("net")
+                launch_time: datetime | None = None
+                if isinstance(net, str):
+                    try:
+                        launch_time = datetime.fromisoformat(net.replace("Z", "+00:00"))
+                    except ValueError:
+                        launch_time = None
+
+                if (
+                    isinstance(provider, str)
+                    and "spacex" in provider.lower()
+                    and launch_time is not None
+                    and launch_time >= now_utc
+                ):
+                    selected = item
+                    break
+
+            if selected is None:
+                continue
+
+            selected_item: dict[str, Any] = selected
+            return {
+                "source": "launch_library_2",
+                "id": selected_item.get("id"),
+                "name": selected_item.get("name"),
+                "date_utc": selected_item.get("net"),
+                "status": (selected_item.get("status") or {}).get("name"),
+                "provider": (selected_item.get("launch_service_provider") or {}).get("name"),
+                "pad": (selected_item.get("pad") or {}).get("name"),
+                "location": ((selected_item.get("pad") or {}).get("location") or {}).get("name"),
+                "url": selected_item.get("url"),
+            }
+        except requests.RequestException as exc:
+            last_error = str(exc)
+
+    return {
+        "source": "launch_library_2",
+        "error": "Unable to fetch upcoming SpaceX launch from Launch Library 2",
+        "details": last_error,
+    }
+
+
 @tool
 def get_latest_launch() -> str:
     """Get the latest SpaceX launch with IDs for related entities."""
@@ -39,6 +185,18 @@ def get_latest_launch() -> str:
 def get_next_launch() -> str:
     """Get the next scheduled SpaceX launch with IDs for related entities."""
     return _as_json(_launch_summary(client.next_launch()))
+
+
+@tool
+def get_latest_launch_external() -> str:
+    """Get latest SpaceX launch from external cross-check source (Launch Library 2)."""
+    return _as_json(_latest_spacex_launch_from_ll2())
+
+
+@tool
+def get_next_launch_external() -> str:
+    """Get next upcoming SpaceX launch from external cross-check source (Launch Library 2)."""
+    return _as_json(_next_spacex_launch_from_ll2())
 
 
 @tool
@@ -155,6 +313,8 @@ def get_recent_launches_from_location(location_query: str, limit: int = 10) -> s
 SPACEX_TOOLS = [
     get_latest_launch,
     get_next_launch,
+    get_latest_launch_external,
+    get_next_launch_external,
     search_launches_by_name,
     get_launches_in_year,
     get_successful_launches_by_rocket,

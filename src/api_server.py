@@ -19,6 +19,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     trace: list[dict[str, Any]]
+    quality_gate: dict[str, Any]
 
 
 app = FastAPI(title="SpaceX Agentic API")
@@ -51,4 +52,8 @@ def chat(payload: ChatRequest) -> ChatResponse:
 
     session = _get_executor(payload.session_id)
     result = session.ask(payload.message)
-    return ChatResponse(answer=result.get("output", ""), trace=result.get("trace", []))
+    return ChatResponse(
+        answer=result.get("output", ""),
+        trace=result.get("trace", []),
+        quality_gate=result.get("quality_gate", {}),
+    )

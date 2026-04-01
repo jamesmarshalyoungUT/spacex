@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 
 import streamlit as st
 
@@ -17,6 +18,41 @@ SAMPLE_QUESTIONS = [
     "What was the outcome of the first Falcon Heavy launch?",
     "Tell me about the most recent launch from Vandenberg.",
 ]
+
+
+def _friendly_utc(date_value: str) -> str | None:
+    try:
+        parsed = datetime.fromisoformat(date_value.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+    return f"{parsed.strftime('%B')} {parsed.day}, {parsed.year} at {parsed.strftime('%H:%M')} UTC"
+
+
+def _collect_friendly_dates(obj: object, prefix: str = "") -> list[tuple[str, str, str]]:
+    results: list[tuple[str, str, str]] = []
+
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, str) and ("date_utc" in key or key in {"net", "date"}):
+                friendly = _friendly_utc(value)
+                if friendly:
+                    results.append((path, value, friendly))
+            results.extend(_collect_friendly_dates(value, path))
+    elif isinstance(obj, list):
+        for idx, item in enumerate(obj):
+            path = f"{prefix}[{idx}]" if prefix else f"[{idx}]"
+            results.extend(_collect_friendly_dates(item, path))
+
+    return results
+
+
+def _friendly_date_hints(observation: str) -> list[tuple[str, str, str]]:
+    try:
+        parsed = json.loads(observation)
+    except json.JSONDecodeError:
+        return []
+    return _collect_friendly_dates(parsed)
 
 
 def _apply_streamlit_secrets() -> None:
@@ -61,7 +97,20 @@ def _render_trace(trace: list[dict]) -> None:
                 st.code(json.dumps(item.get("tool_input"), indent=2, default=str), language="json")
         elif item.get("type") == "observation":
             with st.expander(f"Step {step}: Observation - {item.get('tool')}", expanded=False):
-                st.text(item.get("observation", ""))
+                observation_text = str(item.get("observation", ""))
+                st.text(observation_text)
+                hints = _friendly_date_hints(observation_text)
+                if hints:
+                    st.markdown("**Friendly Dates**")
+                    for path, raw_value, friendly in hints:
+                        st.markdown(f"- `{path}`: `{raw_value}` -> `{friendly}`")
+        elif item.get("type") == "determination":
+            check = item.get("check", "unknown_check")
+            verdict = str(item.get("verdict", "unknown")).upper()
+            rationale = item.get("rationale", "")
+            with st.expander(f"Step {step}: Determination - {check}", expanded=True):
+                st.markdown(f"**Verdict:** {verdict}")
+                st.markdown(f"**Rationale:** {rationale}")
 
 
 def main() -> None:
@@ -94,6 +143,7 @@ def main() -> None:
                 "question": user_input,
                 "answer": result.get("output", ""),
                 "trace": result.get("trace", []),
+                "quality_gate": result.get("quality_gate", {}),
             }
         )
 
@@ -105,6 +155,17 @@ def main() -> None:
         with st.container(border=True):
             st.markdown(f"**Turn {idx}**")
             st.markdown(f"**User:** {turn['question']}")
+            qg = turn.get("quality_gate", {})
+            qg_status = str(qg.get("status", "unknown")).upper()
+            qg_conf = str(qg.get("confidence", "low")).lower()
+            qg_score = qg.get("confidence_score", 50)
+            qg_fallback = bool(qg.get("fallback_used", False))
+            if qg_fallback:
+                st.markdown(
+                    f"**Quality Gate:** {qg_status} ({qg_conf} confidence, score={qg_score}, fallback used)"
+                )
+            else:
+                st.markdown(f"**Quality Gate:** {qg_status} ({qg_conf} confidence, score={qg_score})")
             st.markdown(f"**Agent:** {turn['answer']}")
             st.markdown("**Trace Timeline**")
             _render_trace(turn.get("trace", []))
