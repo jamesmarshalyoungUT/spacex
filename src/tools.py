@@ -17,6 +17,46 @@ def _as_json(data: Any) -> str:
     return json.dumps(data, indent=2, default=str)
 
 
+def _parse_spacex_website_launch_datetime(launch_date: Any, launch_time: Any) -> datetime | None:
+    if not (isinstance(launch_date, str) and launch_date.strip()):
+        return None
+
+    date_formats = ["%Y-%m-%d", "%B %d, %Y", "%b %d, %Y"]
+    parsed_date: datetime | None = None
+    for fmt in date_formats:
+        try:
+            parsed_date = datetime.strptime(launch_date.strip(), fmt)
+            break
+        except ValueError:
+            continue
+
+    if parsed_date is None:
+        return None
+
+    if not isinstance(launch_time, str) or not launch_time.strip():
+        return parsed_date.replace(tzinfo=timezone.utc)
+
+    normalized_time = launch_time.strip().upper().replace(" UTC", "")
+    if normalized_time in {"TBD", "TBA"}:
+        return parsed_date.replace(tzinfo=timezone.utc)
+
+    time_formats = ["%I:%M %p", "%I %p", "%H:%M", "%H"]
+    for fmt in time_formats:
+        try:
+            parsed_time = datetime.strptime(normalized_time, fmt)
+            return parsed_date.replace(
+                hour=parsed_time.hour,
+                minute=parsed_time.minute,
+                second=0,
+                microsecond=0,
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            continue
+
+    return parsed_date.replace(tzinfo=timezone.utc)
+
+
 def _launch_summary(launch: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": launch.get("id"),
@@ -103,6 +143,174 @@ def _latest_spacex_launch_from_ll2() -> dict[str, Any]:
     }
 
 
+def _latest_spacex_launch_from_spacex_website() -> dict[str, Any]:
+    tiles_url = "https://content.spacex.com/api/spacex-website/launches-page-tiles"
+    now_utc = datetime.now(timezone.utc)
+
+    try:
+        response = requests.get(tiles_url, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+        tiles = payload if isinstance(payload, list) else []
+        if not tiles:
+            return {
+                "source": "spacex_website",
+                "error": "SpaceX website launches endpoint returned no results",
+                "details": None,
+            }
+
+        latest_tile: dict[str, Any] | None = None
+        latest_dt: datetime | None = None
+
+        for item in tiles:
+            if not isinstance(item, dict):
+                continue
+
+            mission_status = str(item.get("missionStatus") or "").lower()
+            if mission_status not in {"final", "in-progress"}:
+                continue
+
+            dt = _parse_spacex_website_launch_datetime(item.get("launchDate"), item.get("launchTime"))
+            if dt is None or dt > now_utc:
+                continue
+
+            if latest_dt is None or dt > latest_dt:
+                latest_dt = dt
+                latest_tile = item
+
+        if latest_tile is None:
+            return {
+                "source": "spacex_website",
+                "error": "No recent SpaceX launch found on SpaceX website source",
+                "details": None,
+            }
+
+        pad = latest_tile.get("launchSite")
+        mission_id = latest_tile.get("correlationId") or latest_tile.get("link")
+        mission_link = latest_tile.get("link")
+        return {
+            "source": "spacex_website",
+            "id": mission_id,
+            "name": latest_tile.get("title") or latest_tile.get("name"),
+            "date_utc": latest_dt.isoformat().replace("+00:00", "Z") if latest_dt else None,
+            "status": latest_tile.get("missionStatus"),
+            "provider": "SpaceX",
+            "pad": pad,
+            "location": None,
+            "url": f"https://www.spacex.com/launches/{mission_link}" if mission_link else None,
+        }
+    except requests.RequestException as exc:
+        return {
+            "source": "spacex_website",
+            "error": "Unable to fetch recent SpaceX launch from SpaceX website source",
+            "details": str(exc),
+        }
+
+
+def _latest_spacex_launch_from_rocketlaunch_live() -> dict[str, Any]:
+    url = "https://fdo.rocketlaunch.live/json/launches/next/50"
+    now_utc = datetime.now(timezone.utc)
+
+    try:
+        response = requests.get(url, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+        results = payload.get("result", []) if isinstance(payload, dict) else []
+        if not isinstance(results, list) or not results:
+            return {
+                "source": "rocketlaunch_live",
+                "error": "RocketLaunch.Live returned no results",
+                "details": None,
+            }
+
+        latest_item: dict[str, Any] | None = None
+        latest_dt: datetime | None = None
+
+        for item in results:
+            provider = (item.get("provider") or {}).get("name", "")
+            if not (isinstance(provider, str) and "spacex" in provider.lower()):
+                continue
+
+            raw_date = item.get("t0") or item.get("win_open")
+            if not isinstance(raw_date, str):
+                continue
+            try:
+                dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+
+            # For latest-launch, we only accept launches that are not in the future.
+            if dt > now_utc:
+                continue
+
+            if latest_dt is None or dt > latest_dt:
+                latest_dt = dt
+                latest_item = item
+
+        if not latest_item:
+            return {
+                "source": "rocketlaunch_live",
+                "error": "No recent SpaceX launch found in RocketLaunch.Live results",
+                "details": None,
+            }
+
+        raw_result = latest_item.get("result")
+        status_map = {
+            -1: "Go for Launch",
+            1: "Launch Successful",
+            0: "To Be Determined",
+            3: "Launch Failure",
+            4: "Launch Partial Failure",
+        }
+        if isinstance(raw_result, int):
+            status_label = status_map.get(raw_result, str(raw_result))
+        else:
+            status_label = str(raw_result)
+
+        pad = latest_item.get("pad") or {}
+        location = (pad.get("location") or {}) if isinstance(pad, dict) else {}
+
+        return {
+            "source": "rocketlaunch_live",
+            "id": latest_item.get("id"),
+            "name": latest_item.get("name"),
+            "date_utc": latest_item.get("t0") or latest_item.get("win_open"),
+            "status": status_label,
+            "provider": (latest_item.get("provider") or {}).get("name"),
+            "pad": pad.get("name") if isinstance(pad, dict) else None,
+            "location": location.get("name") if isinstance(location, dict) else None,
+            "url": f"https://rocketlaunch.live/launch/{latest_item.get('slug')}" if latest_item.get("slug") else None,
+        }
+    except requests.RequestException as exc:
+        return {
+            "source": "rocketlaunch_live",
+            "error": "Unable to fetch recent SpaceX launch from RocketLaunch.Live",
+            "details": str(exc),
+        }
+
+
+def _latest_spacex_launch_external() -> dict[str, Any]:
+    ll2 = _latest_spacex_launch_from_ll2()
+    if not ll2.get("error"):
+        ll2["fallback_chain"] = ["launch_library_2"]
+        return ll2
+
+    rll = _latest_spacex_launch_from_rocketlaunch_live()
+    if not rll.get("error"):
+        rll["fallback_chain"] = ["launch_library_2", "rocketlaunch_live"]
+        rll["previous_error"] = ll2.get("error")
+        return rll
+
+    return {
+        "source": "multi_source_fallback",
+        "error": "All latest-launch secondary sources failed",
+        "details": {
+            "launch_library_2": {"error": ll2.get("error"), "details": ll2.get("details")},
+            "rocketlaunch_live": {"error": rll.get("error"), "details": rll.get("details")},
+        },
+    }
+
+
 def _next_spacex_launch_from_ll2() -> dict[str, Any]:
     base_url = "https://ll.thespacedevs.com/2.2.0"
     candidate_paths = [
@@ -175,6 +383,174 @@ def _next_spacex_launch_from_ll2() -> dict[str, Any]:
     }
 
 
+def _next_spacex_launch_from_spacex_website() -> dict[str, Any]:
+    upcoming_tiles_url = "https://content.spacex.com/api/spacex-website/launches-page-tiles/upcoming"
+    timings_url = "https://sxcontent9668.azureedge.us/cms-assets/future_missions.json"
+    now_utc = datetime.now(timezone.utc)
+
+    try:
+        tiles_resp = requests.get(upcoming_tiles_url, timeout=20)
+        tiles_resp.raise_for_status()
+        payload = tiles_resp.json()
+        tiles = payload if isinstance(payload, list) else []
+        if not tiles:
+            return {
+                "source": "spacex_website",
+                "error": "SpaceX website upcoming endpoint returned no results",
+                "details": None,
+            }
+
+        timings_resp = requests.get(timings_url, timeout=20)
+        timings_resp.raise_for_status()
+        timings_payload = timings_resp.json()
+        timings = timings_payload if isinstance(timings_payload, dict) else {}
+
+        best_tile: dict[str, Any] | None = None
+        best_dt: datetime | None = None
+
+        for item in tiles:
+            if not isinstance(item, dict):
+                continue
+            correlation_id = item.get("correlationId")
+            timing = timings.get(correlation_id) if isinstance(correlation_id, str) else None
+            if not isinstance(timing, dict):
+                continue
+
+            t0 = timing.get("TZeroLaunchDate")
+            primary = timing.get("PrimaryLaunchDate")
+            seconds = t0.get("Seconds") if isinstance(t0, dict) else None
+            if not isinstance(seconds, int):
+                seconds = primary.get("Seconds") if isinstance(primary, dict) else None
+            if not isinstance(seconds, int):
+                continue
+
+            dt = datetime.fromtimestamp(seconds, tz=timezone.utc)
+            if dt < now_utc:
+                continue
+
+            if best_dt is None or dt < best_dt:
+                best_dt = dt
+                best_tile = item
+
+        if best_tile is None:
+            return {
+                "source": "spacex_website",
+                "error": "No upcoming SpaceX launch found on SpaceX website source",
+                "details": None,
+            }
+
+        mission_id = best_tile.get("correlationId") or best_tile.get("link")
+        mission_link = best_tile.get("link")
+        return {
+            "source": "spacex_website",
+            "id": mission_id,
+            "name": best_tile.get("title") or best_tile.get("name"),
+            "date_utc": best_dt.isoformat().replace("+00:00", "Z") if best_dt else best_tile.get("dateUtc"),
+            "status": best_tile.get("missionStatus"),
+            "provider": "SpaceX",
+            "pad": best_tile.get("launchSite"),
+            "location": None,
+            "url": f"https://www.spacex.com/launches/{mission_link}" if mission_link else None,
+        }
+    except requests.RequestException as exc:
+        return {
+            "source": "spacex_website",
+            "error": "Unable to fetch upcoming SpaceX launch from SpaceX website source",
+            "details": str(exc),
+        }
+
+
+def _next_spacex_launch_from_rocketlaunch_live() -> dict[str, Any]:
+    url = "https://fdo.rocketlaunch.live/json/launches/next/20"
+    now_utc = datetime.now(timezone.utc)
+
+    try:
+        response = requests.get(url, timeout=20)
+        response.raise_for_status()
+        payload = response.json()
+        results = payload.get("result", []) if isinstance(payload, dict) else []
+        if not isinstance(results, list) or not results:
+            return {
+                "source": "rocketlaunch_live",
+                "error": "RocketLaunch.Live returned no results",
+                "details": None,
+            }
+
+        for item in results:
+            provider = (item.get("provider") or {}).get("name", "")
+            if not (isinstance(provider, str) and "spacex" in provider.lower()):
+                continue
+
+            raw_date = item.get("t0") or item.get("win_open")
+            launch_time: datetime | None = None
+            if isinstance(raw_date, str):
+                try:
+                    launch_time = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+                except ValueError:
+                    launch_time = None
+
+            if launch_time is None or launch_time < now_utc:
+                continue
+
+            pad = item.get("pad") or {}
+            location = (pad.get("location") or {}) if isinstance(pad, dict) else {}
+            raw_result = item.get("result")
+            status_map = {
+                -1: "Go for Launch",
+                1: "Launch Successful",
+                0: "To Be Determined",
+                3: "Launch Failure",
+                4: "Launch Partial Failure",
+            }
+            status_label = status_map.get(raw_result, str(raw_result))
+
+            return {
+                "source": "rocketlaunch_live",
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "date_utc": raw_date,
+                "status": status_label,
+                "provider": provider,
+                "pad": pad.get("name") if isinstance(pad, dict) else None,
+                "location": location.get("name") if isinstance(location, dict) else None,
+                "url": f"https://rocketlaunch.live/launch/{item.get('slug')}" if item.get("slug") else None,
+            }
+
+        return {
+            "source": "rocketlaunch_live",
+            "error": "No upcoming SpaceX launch found in RocketLaunch.Live results",
+            "details": None,
+        }
+    except requests.RequestException as exc:
+        return {
+            "source": "rocketlaunch_live",
+            "error": "Unable to fetch upcoming SpaceX launch from RocketLaunch.Live",
+            "details": str(exc),
+        }
+
+
+def _next_spacex_launch_external() -> dict[str, Any]:
+    ll2 = _next_spacex_launch_from_ll2()
+    if not ll2.get("error"):
+        ll2["fallback_chain"] = ["launch_library_2"]
+        return ll2
+
+    rll = _next_spacex_launch_from_rocketlaunch_live()
+    if not rll.get("error"):
+        rll["fallback_chain"] = ["launch_library_2", "rocketlaunch_live"]
+        rll["previous_error"] = ll2.get("error")
+        return rll
+
+    return {
+        "source": "multi_source_fallback",
+        "error": "All upcoming-launch secondary sources failed",
+        "details": {
+            "launch_library_2": {"error": ll2.get("error"), "details": ll2.get("details")},
+            "rocketlaunch_live": {"error": rll.get("error"), "details": rll.get("details")},
+        },
+    }
+
+
 @tool
 def get_latest_launch() -> str:
     """Get the latest SpaceX launch with IDs for related entities."""
@@ -189,14 +565,14 @@ def get_next_launch() -> str:
 
 @tool
 def get_latest_launch_external() -> str:
-    """Get latest SpaceX launch from external cross-check source (Launch Library 2)."""
-    return _as_json(_latest_spacex_launch_from_ll2())
+    """Get latest SpaceX launch from external cross-check sources (LL2, then RocketLaunch.Live)."""
+    return _as_json(_latest_spacex_launch_external())
 
 
 @tool
 def get_next_launch_external() -> str:
-    """Get next upcoming SpaceX launch from external cross-check source (Launch Library 2)."""
-    return _as_json(_next_spacex_launch_from_ll2())
+    """Get next upcoming SpaceX launch from external cross-check sources (LL2, then RocketLaunch.Live)."""
+    return _as_json(_next_spacex_launch_external())
 
 
 @tool

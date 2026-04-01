@@ -55,6 +55,49 @@ def _friendly_date_hints(observation: str) -> list[tuple[str, str, str]]:
     return _collect_friendly_dates(parsed)
 
 
+def _flow_segment(tool: str | None = None, check: str | None = None) -> str:
+    tool_name = str(tool or "")
+    check_name = str(check or "")
+
+    if tool_name in {
+        "get_latest_launch",
+        "get_next_launch",
+        "search_launches_by_name",
+        "get_launches_in_year",
+        "get_successful_launches_by_rocket",
+        "get_rocket_by_id",
+        "get_launchpad_by_id",
+        "get_recent_launches_from_location",
+    }:
+        return "C-D-E"
+
+    if tool_name in {"freshness_guard", "future_guard"}:
+        return "F-G"
+
+    if tool_name in {"get_latest_launch_external", "get_next_launch_external"}:
+        return "G-L-M/O"
+
+    if tool_name in {"website_lookup_consent_prompt", "website_lookup_user_response"}:
+        return "G-H-I"
+
+    if tool_name in {"spacex_website_latest_lookup", "spacex_website_next_lookup", "spacex_website_lookup"}:
+        return "I-J"
+
+    if tool_name == "final_answer_evaluator_agent":
+        return "P-Q"
+
+    if check_name.startswith("next_launch") or check_name.startswith("latest_launch"):
+        return "F-G"
+    if check_name.startswith("website_lookup_consent"):
+        return "G-H-I"
+    if check_name.startswith("spacex_website_lookup"):
+        return "I-J"
+    if check_name.startswith("final_answer"):
+        return "P-Q"
+
+    return "A-B"
+
+
 def _apply_streamlit_secrets() -> None:
     gemini_api_key = st.secrets.get("GEMINI_API_KEY")
     gemini_model = st.secrets.get("GEMINI_MODEL")
@@ -93,10 +136,12 @@ def _render_trace(trace: list[dict]) -> None:
     for item in trace:
         if item.get("type") == "action":
             step += 1
-            with st.expander(f"Step {step}: Action - {item.get('tool')}", expanded=True):
+            segment = _flow_segment(tool=str(item.get("tool")))
+            with st.expander(f"Step {step} ({segment}): Action - {item.get('tool')}", expanded=True):
                 st.code(json.dumps(item.get("tool_input"), indent=2, default=str), language="json")
         elif item.get("type") == "observation":
-            with st.expander(f"Step {step}: Observation - {item.get('tool')}", expanded=False):
+            segment = _flow_segment(tool=str(item.get("tool")))
+            with st.expander(f"Step {step} ({segment}): Observation - {item.get('tool')}", expanded=False):
                 observation_text = str(item.get("observation", ""))
                 st.text(observation_text)
                 hints = _friendly_date_hints(observation_text)
@@ -108,7 +153,8 @@ def _render_trace(trace: list[dict]) -> None:
             check = item.get("check", "unknown_check")
             verdict = str(item.get("verdict", "unknown")).upper()
             rationale = item.get("rationale", "")
-            with st.expander(f"Step {step}: Determination - {check}", expanded=True):
+            segment = _flow_segment(check=str(check))
+            with st.expander(f"Step {step} ({segment}): Determination - {check}", expanded=True):
                 st.markdown(f"**Verdict:** {verdict}")
                 st.markdown(f"**Rationale:** {rationale}")
 
@@ -141,9 +187,10 @@ def main() -> None:
         st.session_state.history.append(
             {
                 "question": user_input,
-                "answer": result.get("output", ""),
+                "answer": result.get("user_answer", result.get("output", "")),
                 "trace": result.get("trace", []),
                 "quality_gate": result.get("quality_gate", {}),
+                "qa_review": result.get("qa_review", {}),
             }
         )
 
@@ -166,6 +213,10 @@ def main() -> None:
                 )
             else:
                 st.markdown(f"**Quality Gate:** {qg_status} ({qg_conf} confidence, score={qg_score})")
+            qa_review = turn.get("qa_review", {})
+            if qa_review:
+                st.markdown("**QA Evaluator Review**")
+                st.code(json.dumps(qa_review, indent=2, default=str), language="json")
             st.markdown(f"**Agent:** {turn['answer']}")
             st.markdown("**Trace Timeline**")
             _render_trace(turn.get("trace", []))

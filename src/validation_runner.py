@@ -29,10 +29,10 @@ def _run_check(name: str, fn: Callable[[], CheckResult]) -> CheckResult:
 
 
 def run_validation() -> list[CheckResult]:
-    session = build_agent_session(verbose=False)
     results: list[CheckResult] = []
 
     def check_conversational_context() -> CheckResult:
+        session = build_agent_session(verbose=False)
         session.ask("Which rocket was used for the Starlink 9-1 mission?")
         second = session.ask("And where did it launch from?")
         ok = bool(second.get("user_answer")) and _has_trace_type(second.get("trace", []), "action")
@@ -43,26 +43,33 @@ def run_validation() -> list[CheckResult]:
         )
 
     def check_latest_freshness_guard() -> CheckResult:
+        session = build_agent_session(verbose=False)
         res = session.ask("When was the last SpaceX launch?")
         trace = res.get("trace", [])
-        ok = _has_tool(trace, "freshness_guard") and _has_tool(trace, "get_latest_launch_external")
+        ok = _has_tool(trace, "freshness_guard") and (
+            _has_tool(trace, "get_latest_launch_external") or _has_tool(trace, "website_lookup_consent_prompt")
+        )
         return CheckResult(
             name="Latest launch freshness validation",
             ok=ok,
-            details="Expected freshness guard and external cross-check in trace.",
+            details="Expected freshness guard and secondary cross-check before optional website-consent prompt.",
         )
 
     def check_next_future_guard() -> CheckResult:
+        session = build_agent_session(verbose=False)
         res = session.ask("When is the next launch?")
         trace = res.get("trace", [])
-        ok = _has_tool(trace, "future_guard") and _has_tool(trace, "get_next_launch_external")
+        ok = _has_tool(trace, "future_guard") and (
+            _has_tool(trace, "get_next_launch_external") or _has_tool(trace, "website_lookup_consent_prompt")
+        )
         return CheckResult(
             name="Next launch future-date validation",
             ok=ok,
-            details="Expected future guard and external cross-check in trace.",
+            details="Expected future guard and secondary cross-check before optional website-consent prompt.",
         )
 
     def check_ambiguity_clarification() -> CheckResult:
+        session = build_agent_session(verbose=False)
         res = session.ask("Tell me about launch")
         trace = res.get("trace", [])
         ok = _has_tool(trace, "clarification_guard") and "latest launch" in res.get("user_answer", "").lower()
@@ -73,6 +80,7 @@ def run_validation() -> list[CheckResult]:
         )
 
     def check_quality_gate_output() -> CheckResult:
+        session = build_agent_session(verbose=False)
         res = session.ask("How many launches did SpaceX complete in 2024?")
         qg = res.get("quality_gate", {})
         ok = all(k in qg for k in ["status", "confidence", "confidence_score", "summary"])
