@@ -9,6 +9,7 @@ It is built to demonstrate **agentic behavior** required by the challenge:
 - Clarifying questions for ambiguous input
 - Error handling and graceful fallback
 - Visible Think-Act-Observe trace (not a single input-output line)
+- Automatic freshness validation for "latest launch" answers with secondary-source cross-check
 
 ## Stack
 
@@ -18,6 +19,24 @@ It is built to demonstrate **agentic behavior** required by the challenge:
 - CLI chat interface
 - Optional FastAPI web endpoint
 - Streamlit demo app
+
+## Architecture Diagram
+
+```mermaid
+flowchart TD
+  A[User CLI / Streamlit / API] --> B[SpaceXAgentSession]
+  B --> C[Primary Reasoning Agent]
+  C --> D[SpaceX Tools]
+  D --> E[SpaceX API v5]
+  B --> F[Deterministic Guards]
+  F --> G[Freshness/Future Checks]
+  G --> H[External Cross-Check Tools]
+  H --> I[Launch Library 2]
+  B --> J[Final Answer Evaluator Agent]
+  J --> K[Quality Gate + Confidence Score]
+  K --> L[Friendly User Answer]
+  K --> M[Think-Act-Observe Trace + Determinations]
+```
 
 ## Project Files
 
@@ -74,6 +93,14 @@ This runs the exact sample prompts from the hiring prompt and prints:
 - Question
 - Final answer
 - Step-by-step Action and Observation trace
+
+## Run Submission Proof Log (One Command)
+
+```bash
+python -m src.submission_proof
+```
+
+This prints a requirement-by-requirement proof log and embeds the formal validation report.
 
 ## Run API Server (optional)
 
@@ -134,6 +161,47 @@ The Streamlit app provides:
 - session reset button
 - interview sample question picker
 - Action/Observation trace visualization per turn
+
+## Validation
+
+Run formal validation checks:
+
+```bash
+python -m src.validation_runner
+```
+
+See full validation notes in `VALIDATION.md`.
+
+## Requirement Coverage
+
+1. Conversational Agent:
+- CLI, Streamlit, and API chat interfaces
+- session memory maintained across turns
+
+2. Domain: SpaceX:
+- live data answers across launch, rocket, launchpad, and location queries
+
+3. Tool Design:
+- dedicated tools for API calls, parsing, filtering, and fallback handling
+
+4. LLM Integration:
+- intent interpretation + tool orchestration + grounded answer synthesis
+
+5. Agentic Behavior:
+- multi-tool reasoning loops
+- deterministic freshness/future guards
+- clarifying questions for ambiguous launch input
+- final-answer evaluator agent with quality gate
+
+6. Validation:
+- repeatable validation runner and report (`src/validation_runner.py`, `VALIDATION.md`)
+
+## Beyond The Ask
+
+- Quality Gate metadata with confidence score (0-100)
+- Friendly customer-facing answers separated from technical trace
+- Friendly date formatting in user answers and trace hints
+- External cross-source verification to mitigate stale primary API data
 
 ## Notes for Interviewers
 
