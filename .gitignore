@@ -11,6 +11,7 @@ venv/
 
 # Environment files
 .env
+.streamlit/secrets.toml
 
 # Tooling caches
 .pytest_cache/

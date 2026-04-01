@@ -17,6 +17,7 @@ It is built to demonstrate **agentic behavior** required by the challenge:
 - SpaceX v5 API (`https://api.spacexdata.com/v5`)
 - CLI chat interface
 - Optional FastAPI web endpoint
+- Streamlit demo app
 
 ## Project Files
 
@@ -27,6 +28,7 @@ It is built to demonstrate **agentic behavior** required by the challenge:
 - `src/api_server.py`: optional HTTP interface with per-session memory
 - `src/demo_script.py`: runs exact interview sample questions automatically with traces
 - `src/static/index.html`: lightweight web page to visualize Action/Observation timeline
+- `src/streamlit_app.py`: Streamlit chat app with per-turn trace visualization
 
 ## Setup
 
@@ -42,7 +44,7 @@ pip install -r requirements.txt
 copy .env.example .env
 ```
 
-Then edit `.env` and set `OPENAI_API_KEY`.
+Then edit `.env` and set `GEMINI_API_KEY`.
 
 ## Run CLI (recommended for interview demo)
 
@@ -96,6 +98,42 @@ Example request body:
 ```
 
 Response includes `answer` and a `trace` array containing tool calls and observations.
+
+## Run Streamlit App
+
+```bash
+streamlit run src/streamlit_app.py
+```
+
+### Streamlit Secrets (Recommended)
+
+For local Streamlit development:
+
+1. Create `.streamlit/secrets.toml` from `.streamlit/secrets.toml.example`.
+2. Add your real keys in `.streamlit/secrets.toml`.
+3. Keep `.streamlit/secrets.toml` out of git (already ignored in `.gitignore`).
+
+Example:
+
+```toml
+GEMINI_API_KEY = "your_gemini_api_key_here"
+GEMINI_MODEL = "gemini-2.0-flash"
+SPACEX_API_BASE_URL = "https://api.spacexdata.com/v5"
+```
+
+For Streamlit Community Cloud:
+
+1. Open your app settings.
+2. Go to `Secrets`.
+3. Paste the same TOML content and save.
+
+The app reads secrets with `st.secrets` and uses them at runtime.
+
+The Streamlit app provides:
+- conversational chat
+- session reset button
+- interview sample question picker
+- Action/Observation trace visualization per turn
 
 ## Notes for Interviewers
 

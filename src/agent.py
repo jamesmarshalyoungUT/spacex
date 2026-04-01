@@ -5,7 +5,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 
 from .tools import SPACEX_TOOLS
@@ -50,7 +50,7 @@ class SpaceXAgentSession:
     def __init__(self, model_name: str, temperature: float = 0, verbose: bool = True) -> None:
         self._verbose = verbose
         self._messages: list[Any] = []
-        self._llm = ChatOpenAI(model=model_name, temperature=temperature)
+        self._llm = ChatGoogleGenerativeAI(model=model_name, temperature=temperature)
         self._graph = create_react_agent(model=self._llm, tools=SPACEX_TOOLS, prompt=SYSTEM_PROMPT)
 
     def ask(self, user_input: str) -> dict[str, Any]:
@@ -88,9 +88,9 @@ class SpaceXAgentSession:
 def build_agent_session(verbose: bool = True) -> SpaceXAgentSession:
     load_dotenv()
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is missing. Add it in .env before running the agent.")
+        raise RuntimeError("GEMINI_API_KEY is missing. Add it in .env before running the agent.")
 
-    model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     return SpaceXAgentSession(model_name=model_name, temperature=0, verbose=verbose)
