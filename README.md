@@ -51,15 +51,37 @@ flowchart TD
 
 ## Guard Behavior (Consent Before Website Search)
 
-When stale primary launch data is detected, the agent does not automatically scrub the SpaceX website.
+The agent validates different query types and explains primary source limitations before offering fallback options.
 
-It asks the user first with this wording:
+### Validation Guards for Different Query Types
 
-"I was not able to get the information you requested from the primary source. I could look to see if it is available on the SpaceX website. Would you like me to search there?"
+**Latest/Next Launch Queries:**
+- When historical data is stale (>180 days old), agent checks external sources (Launch Library 2, RocketLaunch.Live).
+- If a newer source is found, user confirms before website lookup.
+- If no external source helps, user consents to SpaceX website search.
+
+**Year-Based Queries** (e.g., "What launches happened in 2024?"):
+- Agent queries primary source for launches in the requested year.
+- If no results found, explains primary source limitation and asks for website confirmation.
+- Website confirmation is not available for year queries; suggests trying latest/next search instead.
+
+**Mission-Specific Queries** (e.g., "Which rocket was used for the Starlink 9-1 mission?"):
+- Agent attempts to find mission details in primary source.
+- If no data found (answer is only a confirmation prompt), explains primary source limitation and asks for website confirmation.
+- Website confirmation is not available for mission queries; suggests trying latest/next search instead.
+
+### Consent Prompt Pattern
+
+When stale or unavailable primary data is detected, the agent does not automatically scrub the SpaceX website.
+
+It explains the issue first, then asks the user:
+
+"I was not able to find [this information/launches for this year] in the primary source. I could look to see if it is available on the SpaceX website. Would you like me to search there?"
 
 Behavior:
-- If user says yes: agent performs website lookup.
-- If user says no: agent skips website lookup and keeps the already verified non-SpaceX source answer.
+- If user says yes (for latest/next queries): agent performs website lookup.
+- If user says yes (for year/mission queries): agent returns message that these aren't available via website lookup; suggests alternatives.
+- If user says no: agent skips website lookup and keeps the already verified non-SpaceX source answer (if available).
 - If response is unclear: agent asks for a clear yes/no.
 - If website lookup times out or errors: agent returns a safe fallback message and does not crash.
 
@@ -85,7 +107,7 @@ What it produces:
 
 Why it exists:
 - Keeps answers reliable and auditable.
-- Makes evaluation explicit for interview reviewers.
+- Makes evaluation explicit for reviewers.
 - Prevents silent hallucinations by forcing trace-grounded checks.
 
 ### 2) Engagement Follow-Up Agent (Conversation Continuation)
@@ -111,7 +133,7 @@ Why it exists:
 - QA Evaluator is a safety/quality function.
 - Engagement Follow-Up is a UX/conversation function.
 - Keeping them separate avoids mixing trust decisions with engagement goals.
-- This separation also makes traces easier to audit during interviews.
+- This separation also makes traces easier to audit.
 
 ### Example Trace Snippet
 
@@ -132,7 +154,7 @@ Step 4 (A-B) Determination: engagement_followup => pass
 - `src/agent.py`: ReAct prompt + executor + memory
 - `src/chat_cli.py`: terminal chatbot with reasoning trace output
 - `src/api_server.py`: optional HTTP interface with per-session memory
-- `src/demo_script.py`: runs exact interview sample questions automatically with traces
+- `src/demo_script.py`: runs exact sample questions automatically with traces
 - `src/static/index.html`: lightweight web page to visualize Action/Observation timeline
 - `src/streamlit_app.py`: Streamlit chat app with per-turn trace visualization
 
@@ -152,7 +174,7 @@ copy .env.example .env
 
 Then edit `.env` and set `GEMINI_API_KEY`.
 
-## Run CLI (recommended for interview demo)
+## Run CLI (recommended for demo)
 
 ```bash
 python -m src.chat_cli
@@ -246,7 +268,7 @@ The app reads secrets with `st.secrets` and uses them at runtime.
 The Streamlit app provides:
 - conversational chat
 - session reset button
-- interview sample question picker
+- Sample question picker
 - Action/Observation trace visualization per turn
 
 ## Validation
@@ -276,9 +298,10 @@ See full validation notes in `VALIDATION.md`.
 
 5. Agentic Behavior:
 - multi-tool reasoning loops
-- deterministic freshness/future guards
+- deterministic freshness/future guards for stale latest/next launch data
+- year-based and mission-specific query validation with primary source explanations
 - clarifying questions for ambiguous launch input
-- explicit consent prompt before website lookup when primary data is stale
+- explicit consent prompt before website lookup when primary data is unavailable
 - timeout-safe and exception-safe website lookup execution
 - final-answer evaluator agent with quality gate
 
@@ -294,7 +317,7 @@ See full validation notes in `VALIDATION.md`.
 - SpaceX website direct fallback source integrated in addition to Launch Library 2 and RocketLaunch.Live
 - Consent-first fallback policy to avoid unexpected web scraping behavior
 
-## Notes for Interviewers
+## Notes
 
 - Answers are grounded in real tool outputs from SpaceX API.
 - Agent behavior is observable via verbose traces and returned intermediate steps.

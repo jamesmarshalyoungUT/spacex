@@ -22,7 +22,7 @@ from .tools import (
 )
 
 
-SYSTEM_PROMPT = """You are an AI hiring-test demo agent that answers SpaceX questions using tools.
+SYSTEM_PROMPT = """You are an AI agent that answers SpaceX questions using tools.
 
 Core rules:
 - Never fabricate SpaceX facts. Always call tools for factual answers.
@@ -57,7 +57,14 @@ def _format_trace(messages: list[Any]) -> list[dict[str, Any]]:
     return trace
 
 
+def _is_failed_launch_query(user_input: str) -> bool:
+    text = user_input.lower()
+    return bool(re.search(r"\b(fail|failed|failure|unsuccessful)\b", text)) or _has_fuzzy_keyword(text, ["failed", "failure", "unsuccessful"])
+
+
 def _is_latest_launch_query(user_input: str) -> bool:
+    if _is_failed_launch_query(user_input):
+        return False
     text = user_input.lower()
     has_latest_intent = bool(re.search(r"\b(last|latest)\b", text)) or _has_fuzzy_keyword(text, ["last", "latest", "recent"])
     has_launch_intent = _has_launch_intent(text)
@@ -71,11 +78,46 @@ def _is_next_launch_query(user_input: str) -> bool:
     return has_next_intent and has_launch_intent
 
 
+def _is_year_based_query(user_input: str) -> bool:
+    if not _has_launch_intent(user_input):
+        return False
+    return _extract_year_from_text(user_input) is not None
+
+
+def _is_mission_specific_query(user_input: str) -> bool:
+    if not _has_launch_intent(user_input):
+        return False
+    # Exclude queries that are already handled by other validators
+    if _is_latest_launch_query(user_input):
+        return False
+    if _is_next_launch_query(user_input):
+        return False
+    if _is_year_based_query(user_input):
+        return False
+    if _is_failed_launch_query(user_input):
+        return False
+    # Mission-specific queries have specific mission/payload names or ask about specific details
+    text = user_input.lower()
+    mission_keywords = ["starlink", "falcon", "rocket", "satellite", "payload", "mission", "used", "rocket"]
+    return any(keyword in text for keyword in mission_keywords)
+
+
+def _extract_year_from_text(text: str) -> int | None:
+    match = re.search(r"\b(19|20)\d{2}\b", text)
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except ValueError:
+        return None
+
+
 def _needs_clarification(user_input: str) -> bool:
     text = user_input.lower().strip()
     if not _has_launch_intent(text):
         return False
 
+    year = _extract_year_from_text(text)
     has_specific_scope = any(
         token in text
         for token in [
@@ -97,6 +139,8 @@ def _needs_clarification(user_input: str) -> bool:
             "most recent",
         ]
     )
+    if year is not None:
+        has_specific_scope = True
     return not has_specific_scope
 
 
@@ -179,6 +223,89 @@ def _extract_observation_by_tool(trace: list[dict[str, Any]], tool_name: str) ->
                         return parsed
                 except json.JSONDecodeError:
                     return None
+    return None
+
+
+def _extract_list_observation_by_tool(trace: list[dict[str, Any]], tool_name: str) -> list[dict[str, Any]] | None:
+    for entry in reversed(trace):
+        if entry.get("type") == "observation" and entry.get("tool") == tool_name:
+            raw = entry.get("observation")
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [item for item in parsed if isinstance(item, dict)]
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
+def _build_supported_engagement_followup(user_input: str, trace: list[dict[str, Any]]) -> dict[str, Any] | None:
+    failed_launch = _extract_observation_by_tool(trace, "get_last_failed_launch")
+    next_external = _extract_observation_by_tool(trace, "get_next_launch_external")
+    next_primary = _extract_observation_by_tool(trace, "get_next_launch")
+    latest_external = _extract_observation_by_tool(trace, "get_latest_launch_external")
+    latest_primary = _extract_observation_by_tool(trace, "get_latest_launch")
+    website_lookup = _extract_observation_by_tool(trace, "spacex_website_lookup")
+    requested_year = _extract_year_from_text(user_input)
+
+    def _year_summary_followup(launch_data: dict[str, Any], rationale: str) -> dict[str, Any] | None:
+        date_utc = launch_data.get("date_utc")
+        parsed = _parse_iso_utc(date_utc) if isinstance(date_utc, str) else None
+        year = parsed.year if parsed else None
+        if year is None or year == requested_year:
+            return None
+        return {
+            "include_followup": True,
+            "offer_text": f"I can summarize other SpaceX launches from {year}",
+            "suggested_query": f"What SpaceX launches happened in {year}?",
+            "rationale": rationale,
+        }
+
+    if failed_launch and not failed_launch.get("error") and failed_launch.get("name"):
+        year_followup = _year_summary_followup(
+            failed_launch,
+            "Derived a supported follow-up from the failed launch result using the launches-in-year tool.",
+        )
+        if year_followup:
+            return year_followup
+        return {
+            "include_followup": True,
+            "offer_text": "I can tell you about the next scheduled SpaceX launch",
+            "suggested_query": "When is the next SpaceX launch?",
+            "rationale": "Derived a supported follow-up from the failed launch result using the next-launch tool.",
+        }
+
+    next_launch = next_external or next_primary
+    if next_launch and not next_launch.get("error") and next_launch.get("name"):
+        year_followup = _year_summary_followup(
+            next_launch,
+            "Derived a supported follow-up from the next-launch result using the launches-in-year tool.",
+        )
+        if year_followup:
+            return year_followup
+        return {
+            "include_followup": True,
+            "offer_text": "I can tell you about the most recent completed SpaceX launch",
+            "suggested_query": "When was the latest SpaceX launch?",
+            "rationale": "Derived a supported follow-up from the next-launch result using the latest-launch tool.",
+        }
+
+    latest_launch = website_lookup or latest_external or latest_primary
+    if latest_launch and not latest_launch.get("error") and latest_launch.get("name"):
+        year_followup = _year_summary_followup(
+            latest_launch,
+            "Derived a supported follow-up from the latest-launch result using the launches-in-year tool.",
+        )
+        if year_followup:
+            return year_followup
+        return {
+            "include_followup": True,
+            "offer_text": "I can tell you about the most recent SpaceX launch failure",
+            "suggested_query": "When was the last failed SpaceX launch?",
+            "rationale": "Derived a supported follow-up from the latest-launch result using the failed-launch tool.",
+        }
+
     return None
 
 
@@ -376,7 +503,7 @@ class SpaceXAgentSession:
         }
 
     def _finalize_confirmation_turn(
-        self, user_input: str, answer: str, trace: list[dict[str, Any]]
+        self, user_input: str, answer: str, trace: list[dict[str, Any]], engagement_context: str = ""
     ) -> dict[str, Any]:
         _evaluated_answer, evaluated_trace = self._evaluate_final_answer(
             user_input=user_input,
@@ -390,7 +517,7 @@ class SpaceXAgentSession:
             "reason": "evaluator output not available",
         }
         user_answer = self._maybe_add_engagement_followup(
-            user_input=user_input,
+            user_input=engagement_context or user_input,
             user_answer=answer,
             trace=evaluated_trace,
         )
@@ -412,6 +539,7 @@ class SpaceXAgentSession:
         if _has_user_prompt_question(user_answer):
             return user_answer
 
+        supported_followup = _build_supported_engagement_followup(user_input, trace)
         trace.append(
             {
                 "type": "action",
@@ -423,31 +551,44 @@ class SpaceXAgentSession:
             }
         )
 
-        prompt = (
-            "You are an engagement follow-up agent for a SpaceX assistant.\n"
-            "Given the user question and assistant answer, propose one optional next action the agent can perform to keep the conversation going.\n"
-            "Return JSON only with keys: include_followup (true/false), offer_text, suggested_query, rationale.\n"
-            "Rules:\n"
-            "- offer_text: a short phrase starting with 'I can' describing what the agent will look up (e.g., 'I can find more details about the Falcon 9 rocket used in this mission'). Keep under 18 words.\n"
-            "- suggested_query: the natural-language question the agent should answer if the user says yes (e.g., 'What rocket type is used for the next SpaceX launch?').\n"
-            "- Must be SpaceX-domain and naturally related to the current answer.\n"
-            "- Do not repeat a question that was just answered.\n"
-            "- If no good follow-up exists, set include_followup=false.\n\n"
-            f"User question: {user_input}\n"
-            f"Assistant answer: {user_answer}"
-        )
+        if supported_followup:
+            raw_text = json.dumps(supported_followup, ensure_ascii=True)
+            trace.append(
+                {
+                    "type": "observation",
+                    "tool": "engagement_followup_agent",
+                    "observation": raw_text,
+                }
+            )
+            payload = supported_followup
+        else:
+            prompt = (
+                "You are an engagement follow-up agent for a SpaceX assistant.\n"
+                "Given the user question and assistant answer, propose one next action the agent can perform to keep the conversation going.\n"
+                "Return JSON only with keys: include_followup (true/false), offer_text, suggested_query, rationale.\n"
+                "Rules:\n"
+                "- Always set include_followup=true. Even if the current answer was incomplete or failed, suggest a related SpaceX topic.\n"
+                "- offer_text: a short phrase starting with 'I can' describing what the agent will look up. Keep under 18 words.\n"
+                "- suggested_query: the exact natural-language question the agent should answer if the user says yes.\n"
+                "- Only suggest actions answerable with current reliable tools: latest launch, next launch, last failed launch, or launches in a year.\n"
+                "- Do not suggest rocket details, launchpad details, location-based queries, investigations, causes, biographies, company history, or any topic not directly answerable with those tools.\n"
+                "- Must be SpaceX-domain. Prefer topics related to the user's question.\n"
+                "- Do not repeat a question that was just answered.\n\n"
+                f"User question: {user_input}\n"
+                f"Assistant answer: {user_answer}"
+            )
 
-        raw = self._llm.invoke(prompt)
-        raw_text = str(getattr(raw, "content", raw))
-        trace.append(
-            {
-                "type": "observation",
-                "tool": "engagement_followup_agent",
-                "observation": raw_text,
-            }
-        )
+            raw = self._llm.invoke(prompt)
+            raw_text = str(getattr(raw, "content", raw))
+            trace.append(
+                {
+                    "type": "observation",
+                    "tool": "engagement_followup_agent",
+                    "observation": raw_text,
+                }
+            )
 
-        payload = _extract_json_object(raw_text)
+            payload = _extract_json_object(raw_text)
         if not payload:
             _add_determination(
                 trace,
@@ -501,15 +642,7 @@ class SpaceXAgentSession:
             return self._finalize_confirmation_turn(user_input=user_input, answer=answer, trace=trace)
 
         if not _is_affirmative(user_input):
-            _add_determination(
-                trace,
-                check="engagement_followup_consent",
-                verdict="pending",
-                rationale="User response was unclear; re-prompting.",
-            )
-            self._pending_engagement_action = pending
-            answer = "Please reply yes or no — would you like me to look that up for you?"
-            return self._finalize_confirmation_turn(user_input=user_input, answer=answer, trace=trace)
+            return self.ask(user_input)
 
         _add_determination(
             trace,
@@ -527,6 +660,7 @@ class SpaceXAgentSession:
         primary_data: dict[str, Any] = raw_primary_data if isinstance(raw_primary_data, dict) else {}
         raw_proposed_data = pending.get("proposed_data")
         proposed_data: dict[str, Any] = raw_proposed_data if isinstance(raw_proposed_data, dict) else {}
+        original_query: str = str(pending.get("original_query") or "")
         trace: list[dict[str, Any]] = [
             {
                 "type": "action",
@@ -562,7 +696,7 @@ class SpaceXAgentSession:
                 )
             else:
                 answer = "Understood. I will not search the SpaceX website."
-            return self._finalize_confirmation_turn(user_input=user_input, answer=answer, trace=trace)
+            return self._finalize_confirmation_turn(user_input=user_input, answer=answer, trace=trace, engagement_context=original_query)
 
         if not _is_affirmative(user_input):
             _add_determination(
@@ -590,7 +724,7 @@ class SpaceXAgentSession:
                 }
             )
             website_data = self._invoke_with_timeout(_latest_spacex_launch_from_spacex_website)
-        else:
+        elif query_type == "next":
             trace.append(
                 {
                     "type": "action",
@@ -599,6 +733,31 @@ class SpaceXAgentSession:
                 }
             )
             website_data = self._invoke_with_timeout(_next_spacex_launch_from_spacex_website)
+        elif query_type in ("year", "mission"):
+            # Year-based and mission-specific queries don't have dedicated website lookups; return early with explanation
+            _add_determination(
+                trace,
+                check="spacex_website_lookup",
+                verdict="skipped",
+                rationale=f"{query_type.capitalize()}-based queries are not available via website lookup; only primary source supported.",
+            )
+            query_name = "year-based launch" if query_type == "year" else "mission-specific information"
+            answer = (
+                f"I apologize, but {query_name} lookups are only available from my primary source. "
+                "Unfortunately, no data was found. "
+                "You can try searching for the latest launch or next scheduled launch instead."
+            )
+            return self._finalize_confirmation_turn(user_input=user_input, answer=answer, trace=trace, engagement_context=original_query)
+        else:
+            # Fallback for unknown query types
+            _add_determination(
+                trace,
+                check="spacex_website_lookup",
+                verdict="skipped",
+                rationale="Query type not recognized for website lookup.",
+            )
+            answer = "I apologize, but I cannot search for this information on the SpaceX website right now."
+            return self._finalize_confirmation_turn(user_input=user_input, answer=answer, trace=trace, engagement_context=original_query)
 
         trace.append(
             {
@@ -716,9 +875,13 @@ class SpaceXAgentSession:
         trace = _format_trace(new_messages)
 
         if _is_latest_launch_query(user_input):
-            answer, trace = self._validate_latest_launch_answer(answer=answer, trace=trace)
+            answer, trace = self._validate_latest_launch_answer(answer=answer, trace=trace, user_input=user_input)
         if _is_next_launch_query(user_input):
-            answer, trace = self._validate_next_launch_answer(answer=answer, trace=trace)
+            answer, trace = self._validate_next_launch_answer(answer=answer, trace=trace, user_input=user_input)
+        if _is_year_based_query(user_input):
+            answer, trace = self._validate_year_based_answer(answer=answer, trace=trace, user_input=user_input)
+        if _is_mission_specific_query(user_input):
+            answer, trace = self._validate_mission_specific_answer(answer=answer, trace=trace, user_input=user_input)
 
         if self._pending_website_lookup is not None:
             quality_gate = {
@@ -784,6 +947,37 @@ class SpaceXAgentSession:
         next_external = _extract_observation_by_tool(trace, "get_next_launch_external")
         latest_primary = _extract_observation_by_tool(trace, "get_latest_launch")
         latest_external = _extract_observation_by_tool(trace, "get_latest_launch_external")
+        failed_launch = _extract_observation_by_tool(trace, "get_last_failed_launch")
+        launches_in_year = _extract_list_observation_by_tool(trace, "get_launches_in_year")
+
+        requested_year = _extract_year_from_text(user_input)
+
+        if requested_year is not None and launches_in_year is not None:
+            launch_count = len(launches_in_year)
+            if launch_count == 0:
+                return f"I did not find any SpaceX launches in {requested_year}."
+
+            sample_names = [
+                str(item.get("name", "a mission"))
+                for item in launches_in_year[:3]
+                if isinstance(item, dict)
+            ]
+            examples = ", ".join(sample_names)
+            if launch_count == 1:
+                return f"I found 1 SpaceX launch in {requested_year}: {examples}."
+            return (
+                f"I found {launch_count} SpaceX launches in {requested_year}. "
+                f"Examples include {examples}."
+            )
+
+        if failed_launch and not failed_launch.get("error"):
+            name = failed_launch.get("name", "the mission")
+            date_utc = _friendly_utc(failed_launch.get("date_utc"))
+            details = failed_launch.get("details") or "No additional details available."
+            return (
+                f"The most recent SpaceX launch failure was {name} on {date_utc}. "
+                f"Details: {details}"
+            )
 
         if _is_next_launch_query(user_input):
             # Prefer validated secondary upcoming source when available.
@@ -882,7 +1076,7 @@ class SpaceXAgentSession:
         rewritten_text = str(getattr(rewritten, "content", rewritten)).strip()
         return rewritten_text or technical_answer
 
-    def _validate_latest_launch_answer(self, answer: str, trace: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    def _validate_latest_launch_answer(self, answer: str, trace: list[dict[str, Any]], user_input: str = "") -> tuple[str, list[dict[str, Any]]]:
         latest_launch = _extract_latest_launch_observation(trace)
         if not latest_launch:
             _add_determination(
@@ -987,6 +1181,7 @@ class SpaceXAgentSession:
                     "query_type": "latest",
                     "primary_data": latest_launch,
                     "proposed_data": external_data,
+                    "original_query": user_input,
                 }
                 prompt = (
                     "The SpaceX API appears to be out of date right now. "
@@ -1023,6 +1218,7 @@ class SpaceXAgentSession:
         self._pending_website_lookup = {
             "query_type": "latest",
             "primary_data": latest_launch,
+            "original_query": user_input,
         }
         consent_prompt = (
             "I was not able to get the information you requested from the primary source. "
@@ -1031,7 +1227,7 @@ class SpaceXAgentSession:
         )
         return consent_prompt, trace
 
-    def _validate_next_launch_answer(self, answer: str, trace: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]]:
+    def _validate_next_launch_answer(self, answer: str, trace: list[dict[str, Any]], user_input: str = "") -> tuple[str, list[dict[str, Any]]]:
         next_launch = _extract_next_launch_observation(trace)
         if not next_launch:
             _add_determination(
@@ -1141,6 +1337,7 @@ class SpaceXAgentSession:
                     "query_type": "next",
                     "primary_data": next_launch,
                     "proposed_data": external_data,
+                    "original_query": user_input,
                 }
                 prompt = (
                     "The SpaceX API appears to be out of date right now. "
@@ -1177,6 +1374,7 @@ class SpaceXAgentSession:
         self._pending_website_lookup = {
             "query_type": "next",
             "primary_data": next_launch,
+            "original_query": user_input,
         }
         consent_prompt = (
             "I was not able to get the information you requested from the primary source. "
@@ -1184,6 +1382,74 @@ class SpaceXAgentSession:
             "Would you like me to search there?"
         )
         return consent_prompt, trace
+
+    def _validate_year_based_answer(self, answer: str, trace: list[dict[str, Any]], user_input: str = "") -> tuple[str, list[dict[str, Any]]]:
+        year_based_launches = _extract_list_observation_by_tool(trace, "get_launches_in_year")
+        requested_year = _extract_year_from_text(user_input)
+        if not requested_year:
+            return answer, trace
+
+        if not year_based_launches or len(year_based_launches) == 0:
+            _add_determination(
+                trace,
+                check="year_based_launch_availability",
+                verdict="fail",
+                rationale=f"Primary source returned no launches for {requested_year}.",
+            )
+            self._pending_website_lookup = {
+                "query_type": "year",
+                "primary_data": {},
+                "original_query": user_input,
+            }
+            consent_prompt = (
+                f"I was not able to find any SpaceX launches for {requested_year} in the primary source. "
+                "I could look to see if it is available on the SpaceX website. "
+                "Would you like me to search there?"
+            )
+            return consent_prompt, trace
+
+        _add_determination(
+            trace,
+            check="year_based_launch_availability",
+            verdict="pass",
+            rationale=f"Primary source returned {len(year_based_launches)} launches for {requested_year}.",
+        )
+        return answer, trace
+
+    def _validate_mission_specific_answer(self, answer: str, trace: list[dict[str, Any]], user_input: str = "") -> tuple[str, list[dict[str, Any]]]:
+        # Check if the answer is just asking for confirmation without providing actual data
+        answer_lower = answer.lower()
+        is_confirmation_prompt = (
+            "please reply yes or no" in answer_lower or
+            ("would you like me to search" in answer_lower and "website" in answer_lower)
+        )
+
+        if is_confirmation_prompt:
+            _add_determination(
+                trace,
+                check="mission_specific_data_availability",
+                verdict="fail",
+                rationale="Agent could not find mission-specific data in primary source; offering website confirmation.",
+            )
+            self._pending_website_lookup = {
+                "query_type": "mission",
+                "primary_data": {},
+                "original_query": user_input,
+            }
+            consent_prompt = (
+                "I was not able to find this information in the primary source. "
+                "I could look to see if it is available on the SpaceX website. "
+                "Would you like me to search there?"
+            )
+            return consent_prompt, trace
+
+        _add_determination(
+            trace,
+            check="mission_specific_data_availability",
+            verdict="pass",
+            rationale="Agent provided mission-specific data from primary source.",
+        )
+        return answer, trace
 
     def _evaluate_final_answer(
         self,

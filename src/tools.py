@@ -600,14 +600,32 @@ def get_launches_in_year(year: int, limit: int = 200) -> str:
 
 
 @tool
+def get_last_failed_launch() -> str:
+    """Get the most recent SpaceX launch that failed. Use when user asks about failed or unsuccessful launches."""
+    launches = client.launches_query(
+        {"success": False, "upcoming": False},
+        limit=1,
+    )
+    if not launches:
+        return _as_json({"error": "No failed launches found in the SpaceX API"})
+    return _as_json(_launch_summary(launches[0]))
+
+
+@tool
 def get_successful_launches_by_rocket(rocket_name: str, limit: int = 50) -> str:
     """Find successful launches for a rocket name like Falcon 9 or Falcon Heavy."""
-    rockets = client.rockets_query({"name": {"$regex": rocket_name, "$options": "i"}}, limit=5)
+    try:
+        rockets = client.rockets_query({"name": {"$regex": rocket_name, "$options": "i"}}, limit=5)
+    except RuntimeError as exc:
+        return _as_json({"error": "Rocket lookup failed", "details": str(exc)})
     if not rockets:
         return _as_json({"error": f"No rocket found for query: {rocket_name}"})
 
     rocket_id = rockets[0].get("id")
-    launches = client.launches_query({"rocket": rocket_id, "success": True}, limit=limit)
+    try:
+        launches = client.launches_query({"rocket": rocket_id, "success": True}, limit=limit)
+    except RuntimeError as exc:
+        return _as_json({"error": "Launch lookup failed", "details": str(exc)})
     return _as_json(
         {
             "rocket": {"id": rocket_id, "name": rockets[0].get("name")},
@@ -619,7 +637,10 @@ def get_successful_launches_by_rocket(rocket_name: str, limit: int = 50) -> str:
 @tool
 def get_rocket_by_id(rocket_id: str) -> str:
     """Resolve a rocket ID to rocket details. Use after a launch tool returns rocket_id."""
-    rocket = client.rocket_by_id(rocket_id)
+    try:
+        rocket = client.rocket_by_id(rocket_id)
+    except RuntimeError as exc:
+        return _as_json({"error": f"Rocket not found for id: {rocket_id}", "details": str(exc)})
     result = {
         "id": rocket.get("id"),
         "name": rocket.get("name"),
@@ -635,7 +656,10 @@ def get_rocket_by_id(rocket_id: str) -> str:
 @tool
 def get_launchpad_by_id(launchpad_id: str) -> str:
     """Resolve a launchpad ID to location details. Use after a launch tool returns launchpad_id."""
-    launchpad = client.launchpad_by_id(launchpad_id)
+    try:
+        launchpad = client.launchpad_by_id(launchpad_id)
+    except RuntimeError as exc:
+        return _as_json({"error": f"Launchpad not found for id: {launchpad_id}", "details": str(exc)})
     result = {
         "id": launchpad.get("id"),
         "name": launchpad.get("name"),
@@ -651,23 +675,29 @@ def get_launchpad_by_id(launchpad_id: str) -> str:
 @tool
 def get_recent_launches_from_location(location_query: str, limit: int = 10) -> str:
     """Get recent launches from a location such as Vandenberg."""
-    launchpads = client.launchpads_query(
-        {
-            "$or": [
-                {"name": {"$regex": location_query, "$options": "i"}},
-                {"full_name": {"$regex": location_query, "$options": "i"}},
-                {"locality": {"$regex": location_query, "$options": "i"}},
-                {"region": {"$regex": location_query, "$options": "i"}},
-            ]
-        },
-        limit=5,
-    )
+    try:
+        launchpads = client.launchpads_query(
+            {
+                "$or": [
+                    {"name": {"$regex": location_query, "$options": "i"}},
+                    {"full_name": {"$regex": location_query, "$options": "i"}},
+                    {"locality": {"$regex": location_query, "$options": "i"}},
+                    {"region": {"$regex": location_query, "$options": "i"}},
+                ]
+            },
+            limit=5,
+        )
+    except RuntimeError as exc:
+        return _as_json({"error": "Launchpad search failed", "details": str(exc)})
     if not launchpads:
         return _as_json({"error": f"No launchpads found for query: {location_query}"})
 
     launches: list[dict[str, Any]] = []
     for pad in launchpads:
-        pad_launches = client.launches_query({"launchpad": pad.get("id")}, limit=limit)
+        try:
+            pad_launches = client.launches_query({"launchpad": pad.get("id")}, limit=limit)
+        except RuntimeError as exc:
+            return _as_json({"error": "Launch lookup failed", "details": str(exc)})
         launches.extend(pad_launches)
 
     launches = sorted(launches, key=lambda item: item.get("date_utc") or "", reverse=True)
@@ -693,6 +723,7 @@ SPACEX_TOOLS = [
     get_next_launch_external,
     search_launches_by_name,
     get_launches_in_year,
+    get_last_failed_launch,
     get_successful_launches_by_rocket,
     get_rocket_by_id,
     get_launchpad_by_id,
